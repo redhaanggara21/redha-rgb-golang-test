@@ -1,4 +1,4 @@
-module golang-crud-gin
+module golang-gin
 
 go 1.19
 
