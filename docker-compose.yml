@@ -1,0 +1,141 @@
+version: '3'
+services:
+  app:
+    container_name: full_app
+    build:
+      context: .
+      dockerfile: docker-setup/go-logger/Dockerfile
+    ports:
+      - 8080:8080 # Forward the exposed port 8080 on the container to port 8080 on the host machine
+    restart: on-failure
+    volumes:
+      - api:/usr/src/app/
+    depends_on:
+      - postgres # This service depends on postgres. Start that first.
+      # - mysql # This service depends on mysql. Start that first.
+    networks:
+      - fullstack
+
+  postgres:
+    image: postgres:latest
+    container_name: full_db
+    environment:
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
+      - DATABASE_HOST=${DB_HOST}
+    ports:
+      - '5432:5432'
+    volumes:
+      - database_postgres:/var/lib/postgresql/data
+    networks:
+      - fullstack
+  # mysql:
+  #   image: mysql:5.7
+  #   ports: 
+  #     - 3306:3306
+  #   environment: 
+  #     - MYSQL_DATABASE=${DB_NAME}
+  #     - MYSQL_USER=${DB_USER}
+  #     - MYSQL_PASSWORD=${DB_PASSWORD}
+  #     - MYSQL_ROOT_PASSWORD=${DB_PASSWORD}
+  #     - DATABASE_HOST=${DB_HOST} 
+  #   volumes:
+  #     - database_mysql:/var/lib/postgresql/data
+  #   networks:
+  #     - fullstack
+  filebeat:
+    labels:
+      co.elastic.logs/enabled: false
+    user: root
+    image: docker.elastic.co/beats/filebeat:7.14.0
+    command: filebeat -e -strict.perms=false
+    volumes:
+      - ./filebeat.docker.yml:/usr/share/filebeat/filebeat.yml
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  elasticsearch:
+    labels:
+      co.elastic.logs/enabled: false
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.14.0
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-s",
+          "-f",
+          "http://localhost:9200/_cat/health"
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 80
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - 9200:9200
+    networks:
+      - fullstack
+  kibana:
+    labels:
+      co.elastic.logs/enabled: false
+    image: docker.elastic.co/kibana/kibana:7.14.0
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-s",
+          "-f",
+          "http://localhost:5601/api/status"
+        ]
+      interval: 3s
+      timeout: 3s
+      retries: 80
+    ports:
+      - 5601:5601
+    networks:
+      - fullstack
+    links:
+      - elasticsearch
+    environment:
+      ELASTIC_HOST: "http://elasticsearch:9200"
+      ELASTIC_USERNAME: "elastic"
+      ELASTIC_PASSWORD: "elastic"
+  logstash:
+    build:
+      context: .
+      dockerfile: docker-setup/logstash/Dockerfile
+    ports:
+      - 9600:9600
+      - 5228:5228
+    environment:
+      LOGSTASH_PORT: 5228
+      LOGSTASH_INDEX: "test-index"
+      ELASTIC_HOST: "elasticsearch:9200"
+      ELASTIC_USERNAME: "elastic"
+      ELASTIC_PASSWORD: "elastic"
+    networks:
+      - fullstack
+    depends_on:
+      - elasticsearch
+    links:
+      - elasticsearch
+
+volumes:
+  api:
+  database_postgres:
+  esdata:
+    driver: local
+
+# Networks to be created to facilitate communication between containers
+networks:
+  fullstack:
+    driver: bridge
